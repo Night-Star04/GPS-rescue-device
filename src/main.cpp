@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
+#include "network.h"
 
 typedef struct
 {
@@ -41,13 +42,17 @@ typedef struct
 } GPS_Data_t;
 const String Satellite_str[] = {"GP", "GL", "GN"}; // GPS, GLONASS, GNSS
 
-SoftwareSerial neo(D1, D2); // RX, TX
-const uint8_t neo_PPS = D5; // PPS pin
+SoftwareSerial neo(D1, D2);                  // RX, TX
+Network net("SSID", "PASSWORD", "HOST", 80); // SSID, PASSWORD, HOST, PORT
+const uint8_t neo_PPS = D5;                  // PPS pin
+const uint8_t button = D6;                   // button pin
 
 bool neo_isDataStarted = false; // flag to indicate if data has started
 GPS_Data_t neo_data;            // data structure to store GPS data
 char neo_buffer[128] = {""};    // buffer to store GPS data
 uint8_t neo_bufferIndex = 0;    // index of buffer
+bool button_state = false;      // button state
+unsigned long lastTime = 0;     // last time button pressed
 
 bool Data_Verify(const char *str, uint8_t len);
 bool Data_Checksum(const char *str, uint8_t len);
@@ -61,6 +66,14 @@ void setup()
   Serial.begin(115200);
   neo.begin(9600);
   pinMode(neo_PPS, INPUT);
+  pinMode(button, INPUT);
+
+  net.init();
+  while (!net.begin())
+  {
+    Serial.println("Error connecting to network");
+    delay(1000);
+  }
 }
 
 void loop()
@@ -88,6 +101,33 @@ void loop()
     }
     neo_bufferIndex++;
   }
+
+  if (digitalRead(button) == LOW && !button_state) // if button pressed
+  {
+    button_state = true;
+    unsigned long now = millis();
+    if (now - lastTime < 1000)
+      return;
+    lastTime = now;
+    Serial.println("Send GPS to server");
+    GPS_GGA_t *gga = &neo_data.gga;
+    Body_Params body[] = {
+        {"state", String(gga->status)},
+        {"time", String(gga->time.hour) + ":" + String(gga->time.minute) + ":" + String(gga->time.second) + "." + String(gga->time.millisecond)},
+        {"GPS", String(gga->position.latitude) + gga->position.latitude_direction + "," + String(gga->position.longitude) + gga->position.longitude_direction},
+        {"satellites", String(gga->satellites)},
+        {"hdop", String(gga->hdop)},
+        {"altitude", String(gga->altitude)},
+        {"geoid", String(gga->geoid)},
+    };
+    HTTP_Request req = net.POST(json, body, 7, "/api/gps");
+    if (req.code == 200)
+      Serial.println("Send GPS to server successfully");
+    else
+      Serial.println("Error sending GPS to server");
+  }
+  else if (digitalRead(button) == HIGH && button_state)
+    button_state = false;
 }
 
 bool Data_Verify(const char *str, uint8_t len)
