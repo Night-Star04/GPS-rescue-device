@@ -8,13 +8,17 @@ typedef struct
   uint8_t minute;
   uint8_t second;
   uint16_t millisecond;
+  String toString() const
+  {
+    return String(hour) + ":" + String(minute) + ":" + String(second) + "." + String(millisecond);
+  }
 } Time_t;
 typedef struct
 {
-  float latitude;
-  String latitude_direction;
-  float longitude;
-  String longitude_direction;
+  float lat;      // Latitude
+  String lat_dir; // N or S
+  float lng;      // Longitude
+  String lng_dir; // E or W
 } GPS_Position_t;
 typedef struct
 {
@@ -42,24 +46,27 @@ typedef struct
 } GPS_Data_t;
 const String Satellite_str[] = {"GP", "GL", "GN"}; // GPS, GLONASS, GNSS
 
-SoftwareSerial neo(D1, D2);                  // RX, TX
-Network net("SSID", "PASSWORD", "HOST", 80); // SSID, PASSWORD, HOST, PORT
-const uint8_t neo_PPS = D5;                  // PPS pin
-const uint8_t button = D6;                   // button pin
+SoftwareSerial neo(D1, D2);                    // RX, TX
+Network net("SSID", "PASSWORD", "HOST", 3000); // SSID, PASSWORD, HOST, PORT
+const uint8_t neo_PPS = D5;                    // PPS pin
+const uint8_t button = D6;                     // button pin
 
-bool neo_isDataStarted = false; // flag to indicate if data has started
-GPS_Data_t neo_data;            // data structure to store GPS data
-char neo_buffer[128] = {""};    // buffer to store GPS data
-uint8_t neo_bufferIndex = 0;    // index of buffer
-bool button_state = false;      // button state
-unsigned long lastTime = 0;     // last time button pressed
+bool neo_isDataStarted = false;    // flag to indicate if data has started
+GPS_Data_t neo_data;               // data structure to store GPS data
+char neo_buffer[128] = {""};       // buffer to store GPS data
+uint8_t neo_bufferIndex = 0;       // index of buffer
+bool button_state = false;         // button state
+unsigned long lastTime = 0;        // last time button pressed
+unsigned long sendGPSDelay = 5000; // delay between sending GPS data to server
+String uuid = "";                  // device uuid
 
 bool Data_Verify(const char *str, uint8_t len);
 bool Data_Checksum(const char *str, uint8_t len);
 void Data_Parse(const char *str, uint8_t len);
-void Position_Coversion(GPS_Position_t *position, String latitude, String latitude_direction, String longitude, String longitude_direction);
+void Position_Coversion(GPS_Position_t *position, String lat, String lat_dir, String lng, String lng_dir);
 void Time_Coversion(Time_t *data, String time);
 void printInfo();
+void sendGPS(GPS_GGA_t *gga, String path = "/api/data/log");
 
 void setup()
 {
@@ -72,6 +79,19 @@ void setup()
   while (!net.begin())
   {
     Serial.println("Error connecting to network");
+    delay(1000);
+  }
+  Body_Params body = {"id", net.getMacAddress()};
+  while (uuid == "")
+  {
+    HTTP_Request req = net.POST(json, &body, 1, "/api/device/sign");
+    if (req.code == 200)
+    {
+      uuid = req.body;
+      Serial.println("Get uuid successfully");
+    }
+    else
+      Serial.println("Error getting uuid");
     delay(1000);
   }
 }
@@ -93,13 +113,29 @@ void loop()
 
     char c = neo.read();
     neo_buffer[neo_bufferIndex] = c;
-    if (c == '\n')
+    if (c == '\n') // if end of string
     {
       Data_Parse(neo_buffer, neo_bufferIndex);
       neo_isDataStarted = false;
-      printInfo();
+      // printInfo();
     }
     neo_bufferIndex++;
+  }
+
+  unsigned long now = millis();
+  if (now - lastTime > sendGPSDelay)
+  {
+    Serial.println(uuid);
+    button_state = true;
+    lastTime = now;
+    Serial.println("Send GPS to server");
+    GPS_GGA_t *gga = &neo_data.gga;
+    if (gga->status == 0)
+    {
+      Serial.println("Invalid GGA GPS");
+      return;
+    }
+    sendGPS(gga, "/api/data/updata");
   }
 
   if (digitalRead(button) == LOW && !button_state) // if button pressed
@@ -111,20 +147,12 @@ void loop()
     lastTime = now;
     Serial.println("Send GPS to server");
     GPS_GGA_t *gga = &neo_data.gga;
-    Body_Params body[] = {
-        {"state", String(gga->status)},
-        {"time", String(gga->time.hour) + ":" + String(gga->time.minute) + ":" + String(gga->time.second) + "." + String(gga->time.millisecond)},
-        {"GPS", String(gga->position.latitude) + gga->position.latitude_direction + "," + String(gga->position.longitude) + gga->position.longitude_direction},
-        {"satellites", String(gga->satellites)},
-        {"hdop", String(gga->hdop)},
-        {"altitude", String(gga->altitude)},
-        {"geoid", String(gga->geoid)},
-    };
-    HTTP_Request req = net.POST(json, body, 7, "/api/gps");
-    if (req.code == 200)
-      Serial.println("Send GPS to server successfully");
-    else
-      Serial.println("Error sending GPS to server");
+    if (gga->status == 0)
+    {
+      Serial.println("Invalid GGA GPS");
+      return;
+    }
+    sendGPS(gga);
   }
   else if (digitalRead(button) == HIGH && button_state)
     button_state = false;
@@ -137,7 +165,7 @@ bool Data_Verify(const char *str, uint8_t len)
   return true;
 }
 
-uint8_t hexCharToUint8(char hexChar)
+uint8_t hexCharToUint8(const char hexChar)
 {
   if (hexChar >= '0' && hexChar <= '9')
     return hexChar - '0';
@@ -170,16 +198,16 @@ bool Data_Checksum(const char *str, uint8_t len)
   return false;
 }
 
-void Position_Coversion(GPS_Position_t *position, String latitude, String latitude_direction, String longitude, String longitude_direction)
+void Position_Coversion(GPS_Position_t *position, String lat, String lat_dir, String lng, String lng_dir)
 {
-  position->latitude = latitude.substring(0, 2).toFloat() + latitude.substring(2).toFloat() / 60;
-  position->longitude = longitude.substring(0, 3).toFloat() + longitude.substring(3).toFloat() / 60;
-  if (latitude_direction == "S")
-    position->latitude *= -1;
-  if (longitude_direction == "W")
-    position->longitude *= -1;
-  position->latitude_direction = latitude_direction;   // N or S
-  position->longitude_direction = longitude_direction; // E or W
+  position->lat = lat.substring(0, 2).toFloat() + lat.substring(2).toFloat() / 60;
+  position->lng = lng.substring(0, 3).toFloat() + lng.substring(3).toFloat() / 60;
+  if (lat_dir == "S")
+    position->lat *= -1;
+  if (lng_dir == "W")
+    position->lng *= -1;
+  position->lat_dir = lat_dir; // N or S
+  position->lng_dir = lng_dir; // E or W
 }
 
 void Time_Coversion(Time_t *data, String time)
@@ -205,7 +233,7 @@ void Data_Parse(const char *str, uint8_t len)
 
   int index = 0;                  // index of token
   String str_temp = "";           // temporary string
-  static String token[20] = {""}; // array of string tokens
+  static String token[25] = {""}; // array of string tokens
 
   for (uint8_t i = 1; i < len; i++) // skip the first character '$'
   {
@@ -220,8 +248,7 @@ void Data_Parse(const char *str, uint8_t len)
   }
 
   // parse data
-  static String satellite;
-  satellite = token[0].substring(0, 2);
+  String satellite = token[0].substring(0, 2);
   if (satellite != Satellite_str[0] && satellite != Satellite_str[1] && satellite != Satellite_str[2]) // if not GPS, GLONASS, GNSS
   {
     Serial.println("Invalid satellite");
@@ -268,11 +295,11 @@ void printInfo()
     Serial.print(".");
     Serial.println(neo_data.gga.time.millisecond);
     Serial.print("Position: ");
-    Serial.print(neo_data.gga.position.latitude, 6);
-    Serial.print(neo_data.gga.position.latitude_direction);
+    Serial.print(neo_data.gga.position.lat, 6);
+    Serial.print(neo_data.gga.position.lat_dir);
     Serial.print(",");
-    Serial.print(neo_data.gga.position.longitude, 6);
-    Serial.println(neo_data.gga.position.longitude_direction);
+    Serial.print(neo_data.gga.position.lng, 6);
+    Serial.println(neo_data.gga.position.lng_dir);
     Serial.print("Status: ");
     Serial.print(neo_data.gga.status);
     Serial.print(", Satellites in use: ");
@@ -299,13 +326,35 @@ void printInfo()
     Serial.print(".");
     Serial.println(neo_data.gll.time.millisecond);
     Serial.print("Position: ");
-    Serial.print(neo_data.gll.position.latitude, 6);
-    Serial.print(neo_data.gll.position.latitude_direction);
+    Serial.print(neo_data.gll.position.lat, 6);
+    Serial.print(neo_data.gll.position.lat_dir);
     Serial.print(",");
-    Serial.print(neo_data.gll.position.longitude, 6);
-    Serial.println(neo_data.gll.position.longitude_direction);
+    Serial.print(neo_data.gll.position.lng, 6);
+    Serial.println(neo_data.gll.position.lng_dir);
     Serial.print("Mode: ");
     Serial.println(neo_data.gll.mode);
   }
   Serial.println("--------------------\r\n");
+}
+
+void sendGPS(GPS_GGA_t *gga, String path)
+{
+  Body_Params body[] = {
+      {"id", uuid},
+      {"state", String(gga->status)},
+      {"time", gga->time.toString()},
+      {"lat", String(gga->position.lat, 6)},
+      {"lat_dir", gga->position.lat_dir},
+      {"lng", String(gga->position.lng, 6)},
+      {"lng_dir", gga->position.lng_dir},
+      {"satellites", String(gga->satellites)},
+      {"hdop", String(gga->hdop)},
+      {"altitude", String(gga->altitude)},
+      {"geoid", String(gga->geoid)},
+  };
+  HTTP_Request req = net.POST(json, body, 11, path);
+  if (req.code == 200)
+    Serial.println("Send GPS to server successfully");
+  else
+    Serial.println("Error sending GPS to server");
 }
