@@ -15,11 +15,17 @@ import {
   TableRow,
   TableCell,
   TableBody,
+  Divider,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
 } from "@mui/material";
 
-function DataTable(props: { id: string }) {
-  const { data, error, isLoading } = useSWR(
-    `/api/data/get/?id=${props.id}&mod=list`,
+function DataTable(props: { id?: string }) {
+  const { id } = props;
+  const { data, isLoading } = useSWR(
+    id ? `/api/data/get/?id=${id}&mod=list` : null,
     fetcher_json<Array<GPS_Data>>,
     { refreshInterval: 1000 }
   );
@@ -160,20 +166,22 @@ function Map(props: { position: google.maps.LatLngLiteral }) {
 type HomeProps = { searchParams: { id?: string } };
 
 function Home(Props: HomeProps) {
-  const [deviceID, setDeviceID] = useState(Props.searchParams.id || "");
-  const {
-    data: Info,
-    error,
-    isLoading,
-  } = useSWR(`/api/device/get/?id=${deviceID}`, fetcher_json<Device_Info>);
-
-  const {
-    data: nowData,
-    error: error2,
-    isLoading: isLoading2,
-  } = useSWR(`/api/data/get/?id=${deviceID}&mod=now`, fetcher_json<GPS_Data>, {
-    refreshInterval: 1000,
-  });
+  const [deviceID, setDeviceID] = useState<string | undefined>(
+    Props.searchParams.id
+  );
+  const { data: Info, isLoading } = useSWR(
+    deviceID ? `/api/device/get/?id=${deviceID}` : null,
+    fetcher_json<Device_Info>
+  );
+  const { data: nowData, isLoading: isLoading2 } = useSWR(
+    deviceID ? `/api/data/get/?id=${deviceID}&mod=now` : null,
+    fetcher_json<GPS_Data>,
+    { refreshInterval: 1000 }
+  );
+  const { data: DeviceList } = useSWR(
+    "/api/device/list/get",
+    fetcher_json<Array<Device_Info>>
+  );
 
   return (
     <>
@@ -181,12 +189,50 @@ function Home(Props: HomeProps) {
         <Box sx={{ width: { xs: "100%", md: "25%" } }}>
           <Paper sx={{ p: 2 }} elevation={6}>
             <Text variant="h5">Info</Text>
-            <Text variant="body1" sx={{ pl: 2 }}>
-              ID: {deviceID || "N/A"}
-            </Text>
-            <Text variant="body1" sx={{ pl: 2 }}>
-              Name: {Info?.name || "N/A"}
-            </Text>
+            <div
+              style={{
+                display: "flex",
+                width: "100%",
+                justifyContent: "space-between",
+              }}
+            >
+              <div>
+                <Text variant="body1" sx={{ pl: 2 }}>
+                  ID: {deviceID || "N/A"}
+                </Text>
+                <Text variant="body1" sx={{ pl: 2 }}>
+                  Name: {Info?.name || "N/A"}
+                </Text>
+              </div>
+              <Divider orientation="vertical" flexItem />
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}
+              >
+                <Text variant="body1">Device:</Text>
+                <FormControl sx={{ m: 1, minWidth: 100 }} size="small">
+                  <InputLabel id="Device-ID-select">ID</InputLabel>
+                  <Select
+                    labelId="Device-ID-select"
+                    id="Device-ID-select"
+                    label="ID"
+                    value={deviceID || ""}
+                    onChange={(e) => setDeviceID(e.target.value)}
+                  >
+                    {DeviceList
+                      ? DeviceList.map(({ id, name }) => (
+                          <MenuItem key={id} value={id}>
+                            {name ? `${name}(${id})` : id}
+                          </MenuItem>
+                        ))
+                      : null}
+                  </Select>
+                </FormControl>
+              </div>
+            </div>
           </Paper>
           <Paper sx={{ p: 2, mt: 2 }} elevation={6}>
             <Text variant="h5">Now Location:</Text>
