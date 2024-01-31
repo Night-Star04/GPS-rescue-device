@@ -20,14 +20,24 @@ import {
   InputLabel,
   MenuItem,
   Select,
+  TablePagination,
 } from "@mui/material";
 
 function DataTable(props: { id?: string }) {
   const { id } = props;
+  const [rowsPer, setrowsPer] = useState<number>(15);
+  const [page, setPage] = useState<number>(0);
   const { data, isLoading } = useSWR(
-    id ? `/api/data/get/?id=${id}&mod=list` : null,
+    id
+      ? `/api/data/get/?id=${id}&mod=list&limit=${rowsPer}&page=${page}`
+      : null,
     fetcher_json<Array<GPS_Data>>,
     { refreshInterval: 1000 }
+  );
+  const { data: dataLength } = useSWR(
+    id ? `/api/data/get/?id=${id}&mod=listLegth` : null,
+    fetcher_json<{ length: number }>,
+    { refreshInterval: 10000 }
   );
   return (
     <>
@@ -49,37 +59,56 @@ function DataTable(props: { id?: string }) {
           <Table>
             <TableHead>
               <TableRow>
+                <TableCell>ID</TableCell>
                 <TableCell>Time</TableCell>
-                <TableCell>Latitude</TableCell>
-                <TableCell>Longitude</TableCell>
-                <TableCell>Altitude</TableCell>
-                <TableCell>Altitude (msl)</TableCell>
-                <TableCell>HDOP</TableCell>
+                <TableCell align="right">Latitude</TableCell>
+                <TableCell align="right">Longitude</TableCell>
+                <TableCell align="right">Altitude</TableCell>
+                <TableCell align="right">Altitude (msl)</TableCell>
+                <TableCell align="right">HDOP</TableCell>
                 <TableCell>Url</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {data?.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell>{new Date(row.time).toUTCString()}</TableCell>
-                  <TableCell>{row.lat}</TableCell>
-                  <TableCell>{row.lng}</TableCell>
-                  <TableCell>{row.altitude}</TableCell>
-                  <TableCell>{row.geoid}</TableCell>
-                  <TableCell>{row.hdop}</TableCell>
-                  <TableCell>
-                    <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${row.lat},${row.lng}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Link
-                    </a>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {data?.map((row, i) => {
+                const { id, time, lat, lng, altitude, geoid, hdop } = row;
+                return (
+                  <TableRow key={id}>
+                    <TableCell>{id}</TableCell>
+                    <TableCell>{new Date(time).toUTCString()}</TableCell>
+                    <TableCell align="right">{lat}</TableCell>
+                    <TableCell align="right">{lng}</TableCell>
+                    <TableCell align="right">{altitude}</TableCell>
+                    <TableCell align="right">{geoid}</TableCell>
+                    <TableCell align="right">{hdop}</TableCell>
+                    <TableCell>
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Link
+                      </a>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
+          <TablePagination
+            component="div"
+            rowsPerPageOptions={[10, 15]}
+            count={dataLength?.length || 0}
+            page={page}
+            rowsPerPage={rowsPer}
+            onPageChange={(_e, v) => {
+              setPage(v);
+            }}
+            onRowsPerPageChange={(e) => {
+              setrowsPer(parseInt(e.target.value));
+              setPage(0);
+            }}
+          />
         </>
       )}
     </>
@@ -90,10 +119,12 @@ const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 function Map(props: { position: google.maps.LatLngLiteral }) {
   const { position } = props;
   const mapRef = useRef<HTMLDivElement>(null);
-  const [Location, setLocation] = useState<google.maps.LatLngLiteral | null>(
-    null
-  );
+  const [Location, setLocation] = useState<google.maps.LatLngLiteral>({
+    lat: 91,
+    lng: 181,
+  });
   const [address, setAddress] = useState<string | null>(null);
+  const toFixed = (num: number, digit: number = 3) => num.toFixed(digit);
 
   useEffect(() => {
     const loader = new Loader({
@@ -103,8 +134,8 @@ function Map(props: { position: google.maps.LatLngLiteral }) {
     });
 
     if (
-      position.lat.toFixed(3) === Location?.lat.toFixed(3) &&
-      position.lng.toFixed(3) === Location?.lng.toFixed(3)
+      toFixed(position.lat) === toFixed(Location.lat) &&
+      toFixed(position.lng) === toFixed(Location.lng)
     )
       return; // prevent re-render
 
@@ -115,6 +146,7 @@ function Map(props: { position: google.maps.LatLngLiteral }) {
       map = new google.maps.Map(mapRef.current!, {
         center: position,
         zoom: 15,
+        streetViewControl: false,
       });
       setLocation(position);
     });
@@ -143,22 +175,31 @@ function Map(props: { position: google.maps.LatLngLiteral }) {
   });
   return (
     <>
-      <Text variant="body1">
-        {address ? (
-          <a
-            href={`https://www.google.com/maps/search/?api=1&query=${address}`}
-            target="_blank"
-          >
-            {address}
-          </a>
-        ) : (
-          "Getting address..."
-        )}
-      </Text>
+      <div style={{ display: "flex" }}>
+        <Text variant="body1" sx={{ pl: 1 }}>
+          Address:&nbsp;
+        </Text>
+        <Text variant="body1">
+          {address ? (
+            <a
+              href={
+                address === "Cannot get address"
+                  ? undefined
+                  : `https://www.google.com/maps/search/?api=1&query=${address}`
+              }
+              target="_blank"
+            >
+              {address}
+            </a>
+          ) : (
+            "Getting address..."
+          )}
+        </Text>
+      </div>
       <Text variant="subtitle1" sx={{ pl: 1 }}>
-        {position.lat}, {position.lng}
+        Latitude and longitude: {position.lat}, {position.lng}
       </Text>
-      <div id="map" style={{ height: "49vh" }} ref={mapRef}></div>
+      <div id="map" style={{ height: "48.5vh" }} ref={mapRef}></div>
     </>
   );
 }
@@ -225,7 +266,7 @@ function Home(Props: HomeProps) {
                     {DeviceList
                       ? DeviceList.map(({ id, name }) => (
                           <MenuItem key={id} value={id}>
-                            {name ? `${name}(${id})` : id}
+                            {name || id}
                           </MenuItem>
                         ))
                       : null}
