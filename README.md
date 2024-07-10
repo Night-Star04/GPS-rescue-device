@@ -32,8 +32,10 @@ The microcontroller is used to PlatformIO to build and upload the code to the mi
 
 1. Install [PlatformIO](https://platformio.org/install/ide?install=vscode) on VSCode.
 2. Open the project folder in VSCode.
-3. Adjustment the code in `src/main.cpp` to fit your needs.
-   - network name, password, etc. (Line 50)
+3. Adjustment the code in `include\main.h` and `include\pin.h` to fit your needs.
+   - network name, password, etc. (main.h Line 32 and 33)
+   - server address, port, etc. (main.h Line 33 and 34)
+   - pin number, etc. (pin.h)
 4. Build and upload the code to the microcontroller.
 5. Open the serial monitor to see the output of the code.
 
